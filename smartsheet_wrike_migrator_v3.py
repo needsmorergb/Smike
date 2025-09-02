@@ -2,7 +2,17 @@ import asyncio
 import logging
 import configparser
 import smartsheet
-from wrike import Wrike
+try:
+    from wrike import Wrike
+except ImportError:
+    try:
+        from _py_wrike_v4 import Wrike
+    except ImportError:
+        try:
+            from PyWrike import Wrike
+        except ImportError:
+            import PyWrike
+            Wrike = PyWrike.Wrike
 import re
 import os
 import argparse
