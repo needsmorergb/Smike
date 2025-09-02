@@ -11,8 +11,11 @@ except ImportError:
         try:
             from PyWrike import Wrike
         except ImportError:
-            import PyWrike
-            Wrike = PyWrike.Wrike
+            try:
+                from PyWrike import wrike as Wrike
+            except ImportError:
+                import PyWrike
+                Wrike = PyWrike.wrike
 import re
 import os
 import argparse
