@@ -2,20 +2,7 @@ import asyncio
 import logging
 import configparser
 import smartsheet
-try:
-    from wrike import Wrike
-except ImportError:
-    try:
-        from _py_wrike_v4 import Wrike
-    except ImportError:
-        try:
-            from PyWrike import Wrike
-        except ImportError:
-            try:
-                from PyWrike import wrike as Wrike
-            except ImportError:
-                import PyWrike
-                Wrike = PyWrike.wrike
+import PyWrike
 import re
 import os
 import argparse
@@ -138,11 +125,13 @@ class EmailValidator:
 
 
 class WrikeCustomFieldManager:
-    """Manager for Wrike custom fields operations."""
+    """Manager for Wrike custom fields operations using PyWrike."""
     
-    def __init__(self, wrike_client):
-        self.wrike = wrike_client
+    def __init__(self, wrike_token: str):
+        self.wrike_token = wrike_token
         self._field_cache: Optional[Dict[str, str]] = None
+        # Set up PyWrike authentication
+        PyWrike.wrike.WRIKE_ACCESS_TOKEN = wrike_token
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def get_existing_fields(self) -> Dict[str, str]:
@@ -151,8 +140,7 @@ class WrikeCustomFieldManager:
             return self._field_cache
             
         try:
-            response = self.wrike.customfields.get()
-            custom_fields = response.get('data', [])
+            custom_fields = PyWrike.get_custom_fields()
             self._field_cache = {field['title']: field['id'] for field in custom_fields}
             logger.info(f"Retrieved {len(self._field_cache)} existing custom fields")
             return self._field_cache
@@ -164,8 +152,7 @@ class WrikeCustomFieldManager:
     async def create_field(self, title: str) -> str:
         """Create a single custom field."""
         try:
-            response = self.wrike.customfields.create(title=title, type="Text")
-            field_id = response['data'][0]['id']
+            field_id = PyWrike.create_custom_field(title, "Text")
             logger.info(f"Created custom field '{title}' with ID {field_id}")
             
             # Update cache
@@ -326,32 +313,32 @@ class TaskDataProcessor:
 
 
 class WrikeTaskCreator:
-    """Handler for creating Wrike tasks with rate limiting."""
+    """Handler for creating Wrike tasks using PyWrike."""
     
-    def __init__(self, wrike_client, config: MigrationConfig):
-        self.wrike = wrike_client
+    def __init__(self, wrike_token: str, config: MigrationConfig):
+        self.wrike_token = wrike_token
         self.config = config
         self.semaphore = asyncio.Semaphore(config.max_concurrent_tasks)
+        # Set up PyWrike authentication
+        PyWrike.wrike.WRIKE_ACCESS_TOKEN = wrike_token
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def create_task(self, project_id: str, task_data: TaskData) -> bool:
         """Create a single task with rate limiting."""
         async with self.semaphore:
             try:
-                # Convert TaskData to dict for API call
-                api_data = {
-                    "title": task_data.title,
-                    "status": task_data.status,
-                    "responsibles": task_data.responsibles,
-                    "customFields": task_data.custom_fields
-                }
-                
-                # Use thread pool for blocking API call
+                # Use PyWrike's create_task function
                 loop = asyncio.get_event_loop()
                 with ThreadPoolExecutor() as executor:
-                    await loop.run_in_executor(
-                        executor, 
-                        lambda: self.wrike.tasks.create(project_id, **api_data)
+                    task_id = await loop.run_in_executor(
+                        executor,
+                        lambda: PyWrike.create_task_in_folder(
+                            folder_id=project_id,
+                            title=task_data.title,
+                            status=task_data.status,
+                            responsibles=task_data.responsibles,
+                            custom_fields=task_data.custom_fields
+                        )
                     )
                 
                 logger.info(f"Created task: {task_data.title}")
@@ -390,35 +377,11 @@ class SmartsheetWrikeMigrator:
         self.config = config
         self.smartsheet_client = smartsheet.Smartsheet(config.smartsheet_token)
         
-        # Handle different Wrike package structures
-        try:
-            # Try standard instantiation
-            self.wrike_client = Wrike(config.wrike_token)
-        except TypeError:
-            try:
-                # Try with different constructor
-                import PyWrike
-                self.wrike_client = PyWrike.wrike.WrikeClient(config.wrike_token)
-            except (AttributeError, TypeError):
-                try:
-                    # Try another common pattern
-                    self.wrike_client = PyWrike.wrike.Wrike(config.wrike_token)
-                except (AttributeError, TypeError):
-                    try:
-                        # Last resort - check what's actually available
-                        import PyWrike.wrike as wrike_module
-                        # Create client with whatever constructor is available
-                        if hasattr(wrike_module, 'Client'):
-                            self.wrike_client = wrike_module.Client(config.wrike_token)
-                        elif hasattr(wrike_module, 'WrikeAPI'):
-                            self.wrike_client = wrike_module.WrikeAPI(config.wrike_token)
-                        else:
-                            raise ImportError("Could not find Wrike client class in PyWrike package")
-                    except Exception as e:
-                        raise ImportError(f"Failed to initialize Wrike client: {e}")
+        # Set up PyWrike authentication
+        PyWrike.wrike.WRIKE_ACCESS_TOKEN = config.wrike_token
         
-        self.custom_field_manager = WrikeCustomFieldManager(self.wrike_client)
-        self.task_creator = WrikeTaskCreator(self.wrike_client, config)
+        self.custom_field_manager = WrikeCustomFieldManager(config.wrike_token)
+        self.task_creator = WrikeTaskCreator(config.wrike_token, config)
         self.stats = {
             'total_rows_processed': 0,
             'tasks_created': 0,
@@ -428,15 +391,15 @@ class SmartsheetWrikeMigrator:
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def create_wrike_project(self) -> Dict[str, Any]:
-        """Create the target Wrike project."""
+        """Create the target Wrike project using PyWrike."""
         try:
             project_title = f"{self.config.smartsheet_sheet_id} (Migrated from Smartsheet)"
-            project = self.wrike_client.folders.create(
-                self.config.wrike_folder_id, 
-                title=project_title, 
-                project=True
-            )['data'][0]
-            logger.info(f"Created Wrike project: {project['id']}")
+            project_id = PyWrike.create_wrike_project(
+                folder_id=self.config.wrike_folder_id,
+                title=project_title
+            )
+            project = {'id': project_id, 'title': project_title}
+            logger.info(f"Created Wrike project: {project_id}")
             return project
         except Exception as e:
             logger.error(f"Failed to create Wrike project: {e}")
