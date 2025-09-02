@@ -389,7 +389,34 @@ class SmartsheetWrikeMigrator:
     def __init__(self, config: MigrationConfig):
         self.config = config
         self.smartsheet_client = smartsheet.Smartsheet(config.smartsheet_token)
-        self.wrike_client = Wrike(config.wrike_token)
+        
+        # Handle different Wrike package structures
+        try:
+            # Try standard instantiation
+            self.wrike_client = Wrike(config.wrike_token)
+        except TypeError:
+            try:
+                # Try with different constructor
+                import PyWrike
+                self.wrike_client = PyWrike.wrike.WrikeClient(config.wrike_token)
+            except (AttributeError, TypeError):
+                try:
+                    # Try another common pattern
+                    self.wrike_client = PyWrike.wrike.Wrike(config.wrike_token)
+                except (AttributeError, TypeError):
+                    try:
+                        # Last resort - check what's actually available
+                        import PyWrike.wrike as wrike_module
+                        # Create client with whatever constructor is available
+                        if hasattr(wrike_module, 'Client'):
+                            self.wrike_client = wrike_module.Client(config.wrike_token)
+                        elif hasattr(wrike_module, 'WrikeAPI'):
+                            self.wrike_client = wrike_module.WrikeAPI(config.wrike_token)
+                        else:
+                            raise ImportError("Could not find Wrike client class in PyWrike package")
+                    except Exception as e:
+                        raise ImportError(f"Failed to initialize Wrike client: {e}")
+        
         self.custom_field_manager = WrikeCustomFieldManager(self.wrike_client)
         self.task_creator = WrikeTaskCreator(self.wrike_client, config)
         self.stats = {
