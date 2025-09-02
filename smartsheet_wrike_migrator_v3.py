@@ -394,10 +394,34 @@ class SmartsheetWrikeMigrator:
         """Create the target Wrike project using PyWrike."""
         try:
             project_title = f"{self.config.smartsheet_sheet_id} (Migrated from Smartsheet)"
-            project_id = PyWrike.create_wrike_project(
-                folder_id=self.config.wrike_folder_id,
-                title=project_title
-            )
+            
+            # Try different PyWrike project creation methods
+            try:
+                # Try with parent folder
+                project_id = PyWrike.create_wrike_project(
+                    title=project_title,
+                    parent_folder_id=self.config.wrike_folder_id
+                )
+            except TypeError:
+                try:
+                    # Try with just title and set folder separately
+                    project_id = PyWrike.create_wrike_project(title=project_title)
+                except TypeError:
+                    try:
+                        # Try create_folder_or_project instead
+                        project_id = PyWrike.create_folder_or_project(
+                            parent_id=self.config.wrike_folder_id,
+                            title=project_title,
+                            is_project=True
+                        )
+                    except (TypeError, AttributeError):
+                        # Fallback to create_folder with project=True
+                        project_id = PyWrike.create_folder(
+                            parent_folder_id=self.config.wrike_folder_id,
+                            title=project_title,
+                            project=True
+                        )
+            
             project = {'id': project_id, 'title': project_title}
             logger.info(f"Created Wrike project: {project_id}")
             return project
