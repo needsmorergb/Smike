@@ -1,0 +1,10 @@
+{
+  "Excel Column Name": "Form Field Name",
+  "Name": "full_name",
+  "Email": "email_address",
+  "Phone": "phone_number",
+  "Company": "company_name",
+  "Message": "feedback_message",
+  "Date": "submission_date",
+  "Rating": "satisfaction_rating"
+}
