@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Smartsheet to Wrike Migration Script - FIXED VERSION
-Uses the exact API call format that was proven to work in testing
+Smartsheet to Wrike Migration Script - Non-Azure Version
+Uses direct REST APIs without Graph API or Azure dependencies
+Supports multiple credential sources: env vars, .env file, config.json, or interactive prompts
 """
 
 import requests
@@ -11,7 +12,9 @@ import sys
 import os
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
+from getpass import getpass
+from pathlib import Path
 
 # Setup logging
 def setup_logging(verbose: bool = False) -> logging.Logger:
@@ -47,8 +50,98 @@ def setup_logging(verbose: bool = False) -> logging.Logger:
     
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
-    
+
     return logger
+
+def load_credentials_from_env() -> Tuple[Optional[str], Optional[str]]:
+    """Load credentials from environment variables"""
+    smartsheet_token = os.environ.get('SMARTSHEET_ACCESS_TOKEN')
+    wrike_token = os.environ.get('WRIKE_ACCESS_TOKEN')
+    return smartsheet_token, wrike_token
+
+def load_credentials_from_dotenv() -> Tuple[Optional[str], Optional[str]]:
+    """Load credentials from .env file"""
+    env_file = Path('.env')
+    if not env_file.exists():
+        return None, None
+
+    smartsheet_token = None
+    wrike_token = None
+
+    try:
+        with open(env_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('#') or not line:
+                    continue
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    value = value.strip().strip('"').strip("'")
+                    if key == 'SMARTSHEET_ACCESS_TOKEN':
+                        smartsheet_token = value
+                    elif key == 'WRIKE_ACCESS_TOKEN':
+                        wrike_token = value
+    except Exception:
+        return None, None
+
+    return smartsheet_token, wrike_token
+
+def load_credentials_from_config() -> Tuple[Optional[str], Optional[str]]:
+    """Load credentials from config.json file"""
+    config_file = Path('config.json')
+    if not config_file.exists():
+        return None, None
+
+    try:
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+            smartsheet_token = config.get('smartsheet_access_token')
+            wrike_token = config.get('wrike_access_token')
+            return smartsheet_token, wrike_token
+    except Exception:
+        return None, None
+
+def prompt_for_credentials() -> Tuple[str, str]:
+    """Interactively prompt user for credentials"""
+    print("\nNo credentials found in environment, .env, or config.json")
+    print("Please enter your API credentials:\n")
+
+    smartsheet_token = getpass("Smartsheet Access Token: ").strip()
+    wrike_token = getpass("Wrike Access Token: ").strip()
+
+    return smartsheet_token, wrike_token
+
+def get_credentials(interactive: bool = True) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Get credentials from multiple sources in priority order:
+    1. Environment variables
+    2. .env file
+    3. config.json file
+    4. Interactive prompt (if interactive=True)
+
+    Returns: (smartsheet_token, wrike_token)
+    """
+    # Try environment variables first
+    smartsheet_token, wrike_token = load_credentials_from_env()
+    if smartsheet_token and wrike_token:
+        return smartsheet_token, wrike_token
+
+    # Try .env file
+    smartsheet_token, wrike_token = load_credentials_from_dotenv()
+    if smartsheet_token and wrike_token:
+        return smartsheet_token, wrike_token
+
+    # Try config.json file
+    smartsheet_token, wrike_token = load_credentials_from_config()
+    if smartsheet_token and wrike_token:
+        return smartsheet_token, wrike_token
+
+    # Fall back to interactive prompt
+    if interactive:
+        return prompt_for_credentials()
+
+    return None, None
 
 class SmartsheetWrikeMigrator:
     """Fixed migration class using proven API call format"""
@@ -301,27 +394,51 @@ class SmartsheetWrikeMigrator:
 def main():
     """Main entry point"""
     import argparse
-    
-    parser = argparse.ArgumentParser(description='Migrate Smartsheet to Wrike (COMPLETE)')
+
+    parser = argparse.ArgumentParser(
+        description='Migrate Smartsheet to Wrike (Non-Azure Version)',
+        epilog='''
+Credential Sources (in priority order):
+  1. Environment variables: SMARTSHEET_ACCESS_TOKEN, WRIKE_ACCESS_TOKEN
+  2. .env file in current directory
+  3. config.json file in current directory
+  4. Interactive prompt (if --no-interactive not set)
+
+Examples:
+  # Using environment variables
+  export SMARTSHEET_ACCESS_TOKEN="your_token"
+  export WRIKE_ACCESS_TOKEN="your_token"
+  python smartsheet_wrike_migrator.py --sheet-id 123 --wrike-folder ABC --title-column Title
+
+  # Using .env file (create .env with tokens)
+  python smartsheet_wrike_migrator.py --sheet-id 123 --wrike-folder ABC --title-column Title
+
+  # Interactive mode (will prompt for tokens)
+  python smartsheet_wrike_migrator.py --sheet-id 123 --wrike-folder ABC --title-column Title
+        ''',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument('--sheet-id', required=True, help='Smartsheet sheet ID')
     parser.add_argument('--wrike-folder', required=True, help='Wrike folder ID')
     parser.add_argument('--title-column', required=True, help='Column to use as task title')
     parser.add_argument('--dry-run', action='store_true', help='Test run without creating tasks')
     parser.add_argument('--verbose', action='store_true', help='Verbose logging')
     parser.add_argument('--max-rows', type=int, help='Maximum number of rows to process')
-    
+    parser.add_argument('--no-interactive', action='store_true',
+                       help='Disable interactive credential prompt (fail if no credentials found)')
+
     args = parser.parse_args()
-    
-    # Get tokens from environment
-    smartsheet_token = os.environ.get('SMARTSHEET_ACCESS_TOKEN')
-    wrike_token = os.environ.get('WRIKE_ACCESS_TOKEN')
-    
-    if not smartsheet_token:
-        print("ERROR: Please set SMARTSHEET_ACCESS_TOKEN environment variable")
-        sys.exit(1)
-    
-    if not wrike_token:
-        print("ERROR: Please set WRIKE_ACCESS_TOKEN environment variable")
+
+    # Get credentials from multiple sources
+    smartsheet_token, wrike_token = get_credentials(interactive=not args.no_interactive)
+
+    if not smartsheet_token or not wrike_token:
+        print("\nERROR: No credentials found!")
+        print("\nPlease provide credentials using one of these methods:")
+        print("  1. Environment variables: SMARTSHEET_ACCESS_TOKEN, WRIKE_ACCESS_TOKEN")
+        print("  2. Create a .env file (see .env.example)")
+        print("  3. Create a config.json file (see config.json.example)")
+        print("  4. Run without --no-interactive to be prompted\n")
         sys.exit(1)
     
     # Setup logging

@@ -1,0 +1,11 @@
+{
+  "smartsheet_access_token": "your_smartsheet_token_here",
+  "wrike_access_token": "your_wrike_token_here",
+  "description": "Smartsheet to Wrike Migration Configuration",
+  "notes": [
+    "Copy this file to config.json and fill in your actual tokens",
+    "DO NOT commit config.json to version control!",
+    "Get Smartsheet token from: https://app.smartsheet.com/account/myaccount",
+    "Get Wrike token from: https://www.wrike.com/frontend/apps/index.html#/api"
+  ]
+}
